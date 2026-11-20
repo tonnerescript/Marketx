@@ -10,6 +10,7 @@ const {
 } = require('discord.js');
 
 const db = require('../database/database');
+const promotions = require('./promotions');
 
 function getGuildData(guildId) {
   const data = db.load();
@@ -36,6 +37,13 @@ function isAdmin(interaction) {
 }
 
 function createProductEmbed(product, settings) {
+  const data = db.load();
+  const pricing = promotions.getPricing(data, product.guildId, product);
+
+  const priceText = pricing.percent
+    ? `~~${pricing.originalPrice.toFixed(2)} €~~ **${pricing.finalPrice.toFixed(2)} €** (-${pricing.percent} %)`
+    : `${pricing.originalPrice.toFixed(2)} €`;
+
   const embed = new EmbedBuilder()
     .setColor(settings.color || '#8B5CF6')
     .setTitle(`🛒 ${product.name}`)
@@ -43,7 +51,7 @@ function createProductEmbed(product, settings) {
     .addFields(
       {
         name: '💰 Prix',
-        value: `${product.price} €`,
+        value: priceText,
         inline: true
       },
       {
@@ -67,6 +75,7 @@ async function createTicket(interaction, product) {
   const ticketName = `commande-${number}`;
 
   const selectedRoles = data.ticketRoles[interaction.guildId];
+  const pricing = promotions.getPricing(data, interaction.guildId, product);
 
   const overwrites = [
     {
@@ -119,7 +128,9 @@ async function createTicket(interaction, product) {
     clientId: interaction.user.id,
     productId: product.id,
     productName: product.name,
-    price: product.price,
+    originalPrice: pricing.originalPrice,
+    price: pricing.finalPrice,
+    discountPercent: pricing.percent,
     status: 'pending',
     createdAt: Date.now()
   };
@@ -129,7 +140,9 @@ async function createTicket(interaction, product) {
     clientId: interaction.user.id,
     productId: product.id,
     productName: product.name,
-    price: product.price,
+    originalPrice: pricing.originalPrice,
+    price: pricing.finalPrice,
+    discountPercent: pricing.percent,
     status: 'pending',
     createdAt: Date.now()
   };
@@ -142,7 +155,9 @@ async function createTicket(interaction, product) {
     .setDescription(
       `Bonjour <@${interaction.user.id}>, voici ta commande.\n\n` +
       `**Produit :** ${product.name}\n` +
-      `**Prix :** ${product.price} €\n` +
+      (pricing.percent
+        ? `**Prix initial :** ~~${pricing.originalPrice.toFixed(2)} €~~\n**Réduction :** -${pricing.percent} %\n**Prix final :** ${pricing.finalPrice.toFixed(2)} €\n`
+        : `**Prix :** ${pricing.finalPrice.toFixed(2)} €\n`) +
       `**Référence :** ${number}\n\n` +
       'Un vendeur va prendre en charge ta demande.'
     );

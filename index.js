@@ -13,6 +13,7 @@ const {
 const commands = require('./commands');
 const db = require('./database/database');
 const store = require('./modules/store');
+const promotions = require('./modules/promotions');
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('❌ DISCORD_TOKEN manquant dans .env');
@@ -25,7 +26,7 @@ const client = new Client({
   ]
 });
 
-const allCommands = [...commands, ...store.commands];
+const allCommands = [...commands, ...store.commands, ...promotions.commands];
 client.commands = new Map(allCommands.map(c => [c.data.name, c]));
 
 client.scheduleGiveaway = function(id) {
@@ -123,6 +124,9 @@ client.on('interactionCreate', async interaction => {
     }
 
     if (interaction.isButton()) {
+      const promoHandled = await promotions.handleButton(interaction);
+      if (promoHandled) return;
+
       const handled = await store.handleButton(interaction);
       if (handled) return;
     }
