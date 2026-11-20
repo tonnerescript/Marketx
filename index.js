@@ -12,6 +12,7 @@ const {
 
 const commands = require('./commands');
 const db = require('./database/database');
+const store = require('./modules/store');
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('❌ DISCORD_TOKEN manquant dans .env');
@@ -24,7 +25,8 @@ const client = new Client({
   ]
 });
 
-client.commands = new Map(commands.map(c => [c.data.name, c]));
+const allCommands = [...commands, ...store.commands];
+client.commands = new Map(allCommands.map(c => [c.data.name, c]));
 
 client.scheduleGiveaway = function(id) {
   const data = db.load();
@@ -113,6 +115,16 @@ client.on('interactionCreate', async interaction => {
       if (!command) return;
       await command.execute(interaction, client);
       return;
+    }
+
+    if (interaction.isStringSelectMenu()) {
+      const handled = await store.handleSelect(interaction);
+      if (handled) return;
+    }
+
+    if (interaction.isButton()) {
+      const handled = await store.handleButton(interaction);
+      if (handled) return;
     }
 
     if (interaction.isStringSelectMenu() && interaction.customId === 'marketx_help') {

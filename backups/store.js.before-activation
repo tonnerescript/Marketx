@@ -1,0 +1,506 @@
+const {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+  ChannelType,
+  PermissionFlagsBits
+} = require('discord.js');
+
+const db = require('../database/database');
+
+function getGuildData(guildId) {
+  const data = db.load();
+
+  data.storeSettings[guildId] ||= {
+    name: 'MarketX Store',
+    description: 'Bienvenue dans notre boutique !',
+    color: '#8B5CF6',
+    banner: null,
+    footer: 'MarketX Store'
+  };
+
+  data.ticketRoles[guildId] ||= [];
+  data.forms[guildId] ||= [];
+  data.counters[guildId] ||= 0;
+
+  return data;
+}
+
+function isAdmin(interaction) {
+  return interaction.memberPermissions?.has(
+    PermissionFlagsBits.Administrator
+  );
+}
+
+function createProductEmbed(product, settings) {
+  const embed = new EmbedBuilder()
+    .setColor(settings.color || '#8B5CF6')
+    .setTitle(`🛒 ${product.name}`)
+    .setDescription(product.description)
+    .addFields(
+      {
+        name: '💰 Prix',
+        value: `${product.price} €`,
+        inline: true
+      },
+      {
+        name: '📦 Disponibilité',
+        value: product.available ? 'Disponible' : 'Indisponible',
+        inline: true
+      }
+    )
+    .setFooter({ text: settings.footer || 'MarketX Store' });
+
+  if (product.image) embed.setImage(product.image);
+
+  return embed;
+}
+
+async function createTicket(interaction, product) {
+  const data = getGuildData(interaction.guildId);
+  const guild = interaction.guild;
+
+  const number = ++data.counters[interaction.guildId];
+  const ticketName = `commande-${number}`;
+
+  const selectedRoles = data.ticketRoles[interaction.guildId];
+
+  const overwrites = [
+    {
+      id: guild.id,
+      deny: [PermissionFlagsBits.ViewChannel]
+    },
+    {
+      id: interaction.user.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AttachFiles
+      ]
+    },
+    {
+      id: interaction.client.user.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels
+      ]
+    }
+  ];
+
+  for (const roleId of selectedRoles) {
+    if (guild.roles.cache.has(roleId)) {
+      overwrites.push({
+        id: roleId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      });
+    }
+  }
+
+  const channel = await guild.channels.create({
+    name: ticketName,
+    type: ChannelType.GuildText,
+    permissionOverwrites: overwrites,
+    topic: `Commande ${number} | Client : ${interaction.user.id}`
+  });
+
+  data.tickets[channel.id] = {
+    guildId: interaction.guildId,
+    channelId: channel.id,
+    clientId: interaction.user.id,
+    productId: product.id,
+    productName: product.name,
+    price: product.price,
+    status: 'pending',
+    createdAt: Date.now()
+  };
+
+  data.orders[channel.id] = {
+    guildId: interaction.guildId,
+    clientId: interaction.user.id,
+    productId: product.id,
+    productName: product.name,
+    price: product.price,
+    status: 'pending',
+    createdAt: Date.now()
+  };
+
+  db.save(data);
+
+  const embed = new EmbedBuilder()
+    .setColor('#8B5CF6')
+    .setTitle('🎫 Nouvelle commande')
+    .setDescription(
+      `Bonjour <@${interaction.user.id}>, voici ta commande.\n\n` +
+      `**Produit :** ${product.name}\n` +
+      `**Prix :** ${product.price} €\n` +
+      `**Référence :** ${number}\n\n` +
+      'Un vendeur va prendre en charge ta demande.'
+    );
+
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('marketx_order_validate')
+      .setLabel('Valider la commande')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId('marketx_order_reject')
+      .setLabel('Refuser la commande')
+      .setStyle(ButtonStyle.Danger)
+  );
+
+  await channel.send({
+    content: `<@${interaction.user.id}>`,
+    embeds: [embed],
+    components: [buttons]
+  });
+
+  return channel;
+}
+
+const commands = [
+  {
+    data: new SlashCommandBuilder()
+      .setName('produit')
+      .setDescription('Gestion des produits MarketX')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addSubcommand(sub => sub
+        .setName('ajouter')
+        .setDescription('Ajouter un produit')
+        .addStringOption(o => o.setName('nom').setDescription('Nom').setRequired(true))
+        .addStringOption(o => o.setName('description').setDescription('Description').setRequired(true))
+        .addNumberOption(o => o.setName('prix').setDescription('Prix en euros').setMinValue(0).setRequired(true))
+        .addStringOption(o => o.setName('image').setDescription('URL de l’image').setRequired(false))
+      )
+      .addSubcommand(sub => sub
+        .setName('supprimer')
+        .setDescription('Supprimer un produit')
+        .addStringOption(o => o.setName('id').setDescription('ID du produit').setRequired(true))
+      )
+      .addSubcommand(sub => sub
+        .setName('disponibilite')
+        .setDescription('Activer ou désactiver un produit')
+        .addStringOption(o => o.setName('id').setDescription('ID du produit').setRequired(true))
+        .addBooleanOption(o => o.setName('disponible').setDescription('Disponible ?').setRequired(true))
+      ),
+
+    async execute(interaction) {
+      if (!isAdmin(interaction)) {
+        return interaction.reply({
+          content: '❌ Réservé aux administrateurs.',
+          ephemeral: true
+        });
+      }
+
+      const data = getGuildData(interaction.guildId);
+      const sub = interaction.options.getSubcommand();
+
+      if (sub === 'ajouter') {
+        const product = {
+          id: `${Date.now()}`,
+          guildId: interaction.guildId,
+          name: interaction.options.getString('nom'),
+          description: interaction.options.getString('description'),
+          price: interaction.options.getNumber('prix'),
+          image: interaction.options.getString('image'),
+          available: true,
+          createdAt: Date.now()
+        };
+
+        data.products.push(product);
+        db.save(data);
+
+        return interaction.reply({
+          content: `✅ Produit **${product.name}** ajouté ! ID : \`${product.id}\``,
+          ephemeral: true
+        });
+      }
+
+      const id = interaction.options.getString('id');
+      const product = data.products.find(p =>
+        p.id === id && p.guildId === interaction.guildId
+      );
+
+      if (!product) {
+        return interaction.reply({
+          content: '❌ Produit introuvable.',
+          ephemeral: true
+        });
+      }
+
+      if (sub === 'supprimer') {
+        data.products = data.products.filter(p => p.id !== id);
+        db.save(data);
+
+        return interaction.reply({
+          content: '✅ Produit supprimé.',
+          ephemeral: true
+        });
+      }
+
+      product.available = interaction.options.getBoolean('disponible');
+      db.save(data);
+
+      return interaction.reply({
+        content: `✅ Disponibilité modifiée : ${product.available ? 'Disponible' : 'Indisponible'}.`,
+        ephemeral: true
+      });
+    }
+  },
+
+  {
+    data: new SlashCommandBuilder()
+      .setName('boutique')
+      .setDescription('Gérer la boutique MarketX')
+      .addSubcommand(sub => sub
+        .setName('publier')
+        .setDescription('Publier la boutique dans ce salon')
+      ),
+
+    async execute(interaction) {
+      if (!isAdmin(interaction)) {
+        return interaction.reply({
+          content: '❌ Réservé aux administrateurs.',
+          ephemeral: true
+        });
+      }
+
+      const data = getGuildData(interaction.guildId);
+      const settings = data.storeSettings[interaction.guildId];
+
+      const products = data.products.filter(p =>
+        p.guildId === interaction.guildId && p.available
+      );
+
+      if (!products.length) {
+        return interaction.reply({
+          content: '📭 Aucun produit disponible.',
+          ephemeral: true
+        });
+      }
+
+      await interaction.reply({
+        content: '⏳ Publication de la boutique...',
+        ephemeral: true
+      });
+
+      for (const product of products) {
+        const embed = createProductEmbed(product, settings);
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`marketx_buy:${product.id}`)
+            .setLabel('Commander')
+            .setEmoji('🛒')
+            .setStyle(ButtonStyle.Success)
+        );
+
+        await interaction.channel.send({
+          embeds: [embed],
+          components: [row]
+        });
+      }
+
+      await interaction.editReply({
+        content: `✅ ${products.length} produit(s) publié(s) !`
+      });
+    }
+  },
+
+  {
+    data: new SlashCommandBuilder()
+      .setName('roles-tickets')
+      .setDescription('Configurer les rôles autorisés à voir les tickets')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    async execute(interaction) {
+      const roles = interaction.guild.roles.cache
+        .filter(role => role.id !== interaction.guild.id)
+        .sort((a, b) => b.position - a.position)
+        .first(25);
+
+      if (!roles.length) {
+        return interaction.reply({
+          content: 'Aucun rôle disponible.',
+          ephemeral: true
+        });
+      }
+
+      const data = getGuildData(interaction.guildId);
+      const selected = data.ticketRoles[interaction.guildId];
+
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId('marketx_roles_save')
+        .setPlaceholder('Choisir les rôles autorisés')
+        .setMinValues(0)
+        .setMaxValues(roles.length)
+        .addOptions(roles.map(role => ({
+          label: role.name.slice(0, 100),
+          value: role.id,
+          default: selected.includes(role.id)
+        })));
+
+      return interaction.reply({
+        content: '👥 **Rôles autorisés à voir les tickets**\nSélectionne les rôles puis valide.',
+        components: [new ActionRowBuilder().addComponents(menu)],
+        ephemeral: true
+      });
+    }
+  }
+];
+
+async function handleButton(interaction) {
+  if (!interaction.customId.startsWith('marketx_')) return false;
+
+  if (interaction.customId.startsWith('marketx_buy:')) {
+    const id = interaction.customId.split(':')[1];
+    const data = getGuildData(interaction.guildId);
+
+    const product = data.products.find(p =>
+      p.id === id && p.guildId === interaction.guildId
+    );
+
+    if (!product || !product.available) {
+      await interaction.reply({
+        content: '❌ Ce produit est indisponible.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const existing = Object.values(data.tickets).find(t =>
+      t.guildId === interaction.guildId &&
+      t.clientId === interaction.user.id &&
+      t.status === 'pending'
+    );
+
+    if (existing) {
+      await interaction.reply({
+        content: `❌ Tu as déjà une commande ouverte : <#${existing.channelId}>`,
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const channel = await createTicket(interaction, product);
+
+    await interaction.reply({
+      content: `✅ Ton ticket de commande a été créé : ${channel}`,
+      ephemeral: true
+    });
+
+    return true;
+  }
+
+  if (
+    interaction.customId === 'marketx_order_validate' ||
+    interaction.customId === 'marketx_order_reject'
+  ) {
+    const data = getGuildData(interaction.guildId);
+    const order = data.orders[interaction.channelId];
+
+    if (!order || order.status !== 'pending') {
+      await interaction.reply({
+        content: '❌ Commande introuvable ou déjà traitée.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const allowed = isAdmin(interaction) ||
+      interaction.member.roles.cache.some(role =>
+        data.ticketRoles[interaction.guildId].includes(role.id)
+      );
+
+    if (!allowed) {
+      await interaction.reply({
+        content: '❌ Tu ne possèdes pas le rôle vendeur autorisé.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const rejected = interaction.customId === 'marketx_order_reject';
+
+    if (rejected) {
+      await interaction.reply({
+        content: '❌ Pour refuser une commande, indique une raison avec `/commande-refuser` (à installer dans la prochaine étape).',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    order.status = 'completed';
+    order.sellerId = interaction.user.id;
+    order.completedAt = Date.now();
+
+    const ticket = data.tickets[interaction.channelId];
+    if (ticket) {
+      ticket.status = 'completed';
+      ticket.sellerId = interaction.user.id;
+    }
+
+    data.orderHistory[interaction.guildId] ||= [];
+    data.orderHistory[interaction.guildId].push(order);
+
+    db.save(data);
+
+    await interaction.message.edit({
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('marketx_order_done')
+            .setLabel('Commande validée')
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(true)
+        )
+      ]
+    });
+
+    await interaction.channel.send(
+      `✅ Commande validée par <@${interaction.user.id}>.`
+    );
+
+    return true;
+  }
+
+  return false;
+}
+
+async function handleSelect(interaction) {
+  if (interaction.customId !== 'marketx_roles_save') return false;
+
+  if (!isAdmin(interaction)) {
+    await interaction.reply({
+      content: '❌ Réservé aux administrateurs.',
+      ephemeral: true
+    });
+    return true;
+  }
+
+  const data = getGuildData(interaction.guildId);
+  data.ticketRoles[interaction.guildId] = interaction.values;
+  db.save(data);
+
+  await interaction.update({
+    content: `✅ ${interaction.values.length} rôle(s) autorisé(s) à voir les tickets.`,
+    components: []
+  });
+
+  return true;
+}
+
+module.exports = {
+  commands,
+  handleButton,
+  handleSelect
+};
