@@ -647,8 +647,21 @@ async function handleButton(interaction) {
       return true;
     }
 
+    // Enregistrer la fermeture dans la base de données
+    ticket.status = 'closed';
+    ticket.closedAt = Date.now();
+    ticket.closedBy = interaction.user.id;
+
+    if (data.orders[interaction.channelId]) {
+      data.orders[interaction.channelId].status = 'closed';
+      data.orders[interaction.channelId].closedAt = ticket.closedAt;
+      data.orders[interaction.channelId].closedBy = interaction.user.id;
+    }
+
+    db.save(data);
+
     await interaction.reply({
-      content: '🔒 Fermeture du ticket dans 5 secondes...',
+      content: '🔒 Ticket fermé. Tu peux maintenant créer une nouvelle commande.',
       ephemeral: true
     });
 
