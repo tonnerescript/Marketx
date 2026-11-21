@@ -16,7 +16,11 @@ const defaults = {
   promotions: {},
   reviews: {},
   orderHistory: {},
-  counters: {}
+  counters: {},
+  categories: {},
+  coupons: {},
+  loyalty: {},
+  vendors: {}
 };
 
 function load() {

@@ -5,6 +5,7 @@ const { REST, Routes } = require('discord.js');
 const oldCommands = require('./commands');
 const store = require('./modules/store');
 const promotions = require('./modules/promotions');
+const management = require('./modules/management');
 
 async function deploy() {
   if (!process.env.DISCORD_TOKEN || !process.env.CLIENT_ID) {
@@ -12,7 +13,7 @@ async function deploy() {
     process.exit(1);
   }
 
-  const commands = [...oldCommands, ...store.commands, ...promotions.commands];
+  const commands = [...oldCommands, ...store.commands, ...promotions.commands, ...management.commands];
   const names = commands.map(c => c.data.name);
 
   if (names.length !== new Set(names).size) {

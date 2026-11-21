@@ -26,6 +26,12 @@ function getGuildData(guildId) {
   data.ticketRoles[guildId] ||= [];
   data.forms[guildId] ||= [];
   data.counters[guildId] ||= 0;
+  data.categories ||= {};
+  data.categories[guildId] ||= [];
+  data.vendors ||= {};
+  data.vendors[guildId] ||= { users: [], roles: [] };
+  data.vendors[guildId].users ||= [];
+  data.vendors[guildId].roles ||= [];
 
   return data;
 }
@@ -34,6 +40,18 @@ function isAdmin(interaction) {
   return interaction.memberPermissions?.has(
     PermissionFlagsBits.Administrator
   );
+}
+
+function isSeller(interaction, data) {
+  if (isAdmin(interaction)) return true;
+  const guildId = interaction.guildId;
+  const memberRoles = interaction.member?.roles?.cache;
+  const ticketRoles = data.ticketRoles[guildId] || [];
+  const vendorConfig = data.vendors?.[guildId] || { users: [], roles: [] };
+  if (vendorConfig.users?.includes(interaction.user.id)) return true;
+  return Boolean(memberRoles?.some(role =>
+    ticketRoles.includes(role.id) || (vendorConfig.roles || []).includes(role.id)
+  ));
 }
 
 
@@ -81,6 +99,10 @@ function createProductEmbed(product, settings) {
     });
   }
 
+  if (product.category) {
+    embed.addFields({ name: '📂 CATÉGORIE', value: product.category, inline: true });
+  }
+
   if (product.image) {
     embed.setThumbnail(product.image);
   }
@@ -95,7 +117,10 @@ async function createTicket(interaction, product) {
   const number = ++data.counters[interaction.guildId];
   const ticketName = `commande-${number}`;
 
-  const selectedRoles = data.ticketRoles[interaction.guildId];
+  const selectedRoles = [...new Set([
+    ...(data.ticketRoles[interaction.guildId] || []),
+    ...(data.vendors[interaction.guildId]?.roles || [])
+  ])];
   const pricing = promotions.getPricing(data, interaction.guildId, product);
 
   const overwrites = [
@@ -136,6 +161,19 @@ async function createTicket(interaction, product) {
     }
   }
 
+  for (const userId of (data.vendors[interaction.guildId]?.users || [])) {
+    if (userId !== interaction.user.id) {
+      overwrites.push({
+        id: userId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      });
+    }
+  }
+
   const channel = await guild.channels.create({
     name: ticketName,
     type: ChannelType.GuildText,
@@ -158,6 +196,7 @@ async function createTicket(interaction, product) {
 
   data.orders[channel.id] = {
     guildId: interaction.guildId,
+    channelId: channel.id,
     clientId: interaction.user.id,
     productId: product.id,
     productName: product.name,
@@ -221,6 +260,7 @@ const commands = [
         .addStringOption(o => o.setName('description').setDescription('Description').setRequired(true))
         .addNumberOption(o => o.setName('prix').setDescription('Prix en euros').setMinValue(0).setRequired(true))
         .addStringOption(o => o.setName('image').setDescription('URL de l’image').setRequired(false))
+        .addStringOption(o => o.setName('categorie').setDescription('Catégorie existante (facultatif)').setRequired(false))
       )
       .addSubcommand(sub => sub
         .setName('supprimer')
@@ -246,6 +286,10 @@ const commands = [
       const sub = interaction.options.getSubcommand();
 
       if (sub === 'ajouter') {
+        const category = interaction.options.getString('categorie');
+        if (category && !(data.categories[interaction.guildId] || []).some(name => name.toLowerCase() === category.toLowerCase())) {
+          return interaction.reply({ content: '❌ Catégorie introuvable. Crée-la avec `/categorie ajouter`.', ephemeral: true });
+        }
         const product = {
           id: `${Date.now()}`,
           guildId: interaction.guildId,
@@ -253,6 +297,7 @@ const commands = [
           description: interaction.options.getString('description'),
           price: interaction.options.getNumber('prix'),
           image: interaction.options.getString('image'),
+          category: category || null,
           available: true,
           createdAt: Date.now()
         };
@@ -479,10 +524,7 @@ const commands = [
         });
       }
 
-      const allowed = isAdmin(interaction) ||
-        interaction.member.roles.cache.some(role =>
-          data.ticketRoles[interaction.guildId].includes(role.id)
-        );
+      const allowed = isSeller(interaction, data);
 
       if (!allowed) {
         return interaction.reply({
@@ -634,10 +676,7 @@ async function handleButton(interaction) {
     }
 
     const isClient = ticket.clientId === interaction.user.id;
-    const isStaff = isAdmin(interaction) ||
-      interaction.member.roles.cache.some(role =>
-        data.ticketRoles[interaction.guildId].includes(role.id)
-      );
+    const isStaff = isSeller(interaction, data);
 
     if (!isClient && !isStaff) {
       await interaction.reply({
@@ -653,9 +692,10 @@ async function handleButton(interaction) {
     ticket.closedBy = interaction.user.id;
 
     if (data.orders[interaction.channelId]) {
-      data.orders[interaction.channelId].status = 'closed';
-      data.orders[interaction.channelId].closedAt = ticket.closedAt;
-      data.orders[interaction.channelId].closedBy = interaction.user.id;
+      const order = data.orders[interaction.channelId];
+      if (order.status === 'pending') order.status = 'cancelled';
+      order.closedAt = ticket.closedAt;
+      order.closedBy = interaction.user.id;
     }
 
     db.save(data);
@@ -697,10 +737,7 @@ async function handleButton(interaction) {
       return true;
     }
 
-    const allowed = isAdmin(interaction) ||
-      interaction.member.roles.cache.some(role =>
-        data.ticketRoles[interaction.guildId].includes(role.id)
-      );
+    const allowed = isSeller(interaction, data);
 
     if (!allowed) {
       await interaction.reply({
@@ -730,8 +767,29 @@ async function handleButton(interaction) {
       ticket.sellerId = interaction.user.id;
     }
 
+    // Consommer le code promo uniquement à la validation finale.
+    if (order.couponCode) {
+      const coupons = data.coupons?.[interaction.guildId] || [];
+      const coupon = coupons.find(c => c.code === order.couponCode);
+      if (coupon) coupon.uses = Math.min(coupon.maxUses, (coupon.uses || 0) + 1);
+    }
+
+    // Créditer les points de fidélité uniquement après validation.
+    data.loyalty ||= {};
+    data.loyalty[interaction.guildId] ||= { pointsPerEuro: 1, members: {} };
+    const loyalty = data.loyalty[interaction.guildId];
+    loyalty.members ||= {};
+    const pointsEarned = Math.floor(Number(order.price || 0) * Number(loyalty.pointsPerEuro ?? 1));
+    if (pointsEarned > 0) {
+      const member = loyalty.members[order.clientId] ||= { points: 0, history: [] };
+      member.history ||= [];
+      member.points = Number(member.points || 0) + pointsEarned;
+      member.history.push({ type: 'earn', points: pointsEarned, orderChannelId: interaction.channelId, at: Date.now() });
+      order.pointsEarned = pointsEarned;
+    }
+
     data.orderHistory[interaction.guildId] ||= [];
-    data.orderHistory[interaction.guildId].push(order);
+    data.orderHistory[interaction.guildId].push({ ...order });
 
     db.save(data);
 

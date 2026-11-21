@@ -14,6 +14,7 @@ const commands = require('./commands');
 const db = require('./database/database');
 const store = require('./modules/store');
 const promotions = require('./modules/promotions');
+const management = require('./modules/management');
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('❌ DISCORD_TOKEN manquant dans .env');
@@ -26,7 +27,7 @@ const client = new Client({
   ]
 });
 
-const allCommands = [...commands, ...store.commands, ...promotions.commands];
+const allCommands = [...commands, ...store.commands, ...promotions.commands, ...management.commands];
 client.commands = new Map(allCommands.map(c => [c.data.name, c]));
 
 client.scheduleGiveaway = function(id) {

@@ -1,0 +1,44 @@
+MARKETX V3 - INSTALLATION
+
+1. Fais une sauvegarde de ton dossier MarketX et de database/data.json.
+2. Remplace les fichiers du projet par ceux de cette archive en conservant ton .env.
+3. Dans Termux, exécute :
+   npm install
+   node --check modules/management.js
+   node --check modules/store.js
+   node --check index.js
+   node --check deploy-commands.js
+   npm run deploy
+4. Redémarre le bot.
+
+NOUVELLES COMMANDES
+- /marketx-panel : centre de gestion
+- /categorie ajouter|supprimer|liste : catégories de produits
+- /codepromo creer|liste|supprimer : codes promotionnels personnalisés
+- /codepromo-appliquer : appliquer un code dans le ticket de commande
+- /vendeurs ajouter|retirer|role-ajouter|role-retirer|liste : vendeurs et rôles
+- /commande-prendre : prendre en charge une commande dans son ticket
+- /commandes en-attente|historique : consulter les commandes
+- /historique-achats : historique d'un membre
+- /fidelite solde|configurer|convertir : points et récompenses
+- /marketx-stats : statistiques de la boutique
+- /boutique-config : apparence de la boutique
+
+FIDELITE
+- Par défaut : 1 point par euro payé.
+- La configuration points_par_euro peut être modifiée par un administrateur.
+- 100 points = 5 % de réduction, 200 points = 10 %, etc. (plafond de 50 %).
+- Les points sont crédités uniquement après validation d'une commande.
+
+CODES PROMO
+- Réduction en pourcentage, limitée à un nombre d'utilisations.
+- Peut cibler un produit précis ou toute la boutique.
+- La consommation est comptabilisée à la validation de la commande.
+
+DONNEES
+- Les nouvelles données sont isolées par serveur Discord.
+- Les anciennes clés de base de données sont conservées.
+- Conserver le fichier .env existant : il n'est pas inclus dans cette archive.
+
+IMPORTANT
+Cette archive a passé les vérifications de syntaxe Node.js. Le test d'intégration Discord en direct doit être fait après installation, avec les permissions nécessaires au bot.
