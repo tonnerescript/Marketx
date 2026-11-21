@@ -36,33 +36,54 @@ function isAdmin(interaction) {
   );
 }
 
+
+
 function createProductEmbed(product, settings) {
   const data = db.load();
   const pricing = promotions.getPricing(data, product.guildId, product);
 
   const priceText = pricing.percent
-    ? `~~${pricing.originalPrice.toFixed(2)} €~~ **${pricing.finalPrice.toFixed(2)} €** (-${pricing.percent} %)`
-    : `${pricing.originalPrice.toFixed(2)} €`;
+    ? `~~${pricing.originalPrice.toFixed(2)} €~~ **${pricing.finalPrice.toFixed(2)} €**`
+    : `**${pricing.finalPrice.toFixed(2)} €**`;
 
   const embed = new EmbedBuilder()
     .setColor(settings.color || '#8B5CF6')
-    .setTitle(`🛒 ${product.name}`)
-    .setDescription(product.description)
+    .setAuthor({
+      name: '✦ MARKETX PREMIUM'
+    })
+    .setTitle(`🛍️ ${product.name}`)
+    .setDescription(
+      `${product.description || 'Découvrez ce produit dans notre boutique.'}\n\n` +
+      '━━━━━━━━━━━━━━━━━━━━'
+    )
     .addFields(
       {
-        name: '💰 Prix',
+        name: '💎 PRIX',
         value: priceText,
         inline: true
       },
       {
-        name: '📦 Disponibilité',
-        value: product.available ? 'Disponible' : 'Indisponible',
+        name: '📦 DISPONIBILITÉ',
+        value: '🟢 Disponible',
         inline: true
       }
     )
-    .setFooter({ text: settings.footer || 'MarketX Store' });
+    .setFooter({
+      text: `${settings.footer || 'MARKETX STORE'} • Paiement et informations dans le ticket`
+    })
+    .setTimestamp();
 
-  if (product.image) embed.setImage(product.image);
+  if (pricing.percent) {
+    embed.addFields({
+      name: '🔥 OFFRE SPÉCIALE',
+      value: `**-${pricing.percent} %** de réduction`,
+      inline: false
+    });
+  }
+
+  if (product.image) {
+    embed.setThumbnail(product.image);
+  }
 
   return embed;
 }
@@ -308,13 +329,58 @@ const commands = [
         ephemeral: true
       });
 
+
+      const total = products.length;
+      const dataCount = data.products.filter(
+        p => p.guildId === interaction.guildId
+      ).length;
+
+      const header = new EmbedBuilder()
+        .setColor(settings.color || '#8B5CF6')
+        .setAuthor({
+          name: '✦ MARKETX PREMIUM • OFFICIAL STORE'
+        })
+        .setTitle(`🛍️ ${settings.name || 'MarketX Store'}`)
+        .setDescription(
+          `${settings.description || 'Bienvenue dans notre boutique !'}\n\n` +
+          '━━━━━━━━━━━━━━━━━━━━\n' +
+          '**✨ Découvrez nos offres et nos produits**\n' +
+          'Sélectionnez un produit et cliquez sur le bouton pour passer commande.\n' +
+          '━━━━━━━━━━━━━━━━━━━━'
+        )
+        .addFields(
+          {
+            name: '📦 PRODUITS DISPONIBLES',
+            value: `**${total}** produit(s)`,
+            inline: true
+          },
+          {
+            name: '🛒 COMMANDE',
+            value: 'Ticket privé automatique',
+            inline: true
+          }
+        )
+        .setFooter({
+          text: `${settings.footer || 'MARKETX STORE'} • Boutique officielle`
+        })
+        .setTimestamp();
+
+      if (settings.banner) {
+        header.setImage(settings.banner);
+      }
+
+      await interaction.channel.send({
+        embeds: [header]
+      });
+
+
       for (const product of products) {
         const embed = createProductEmbed(product, settings);
 
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId(`marketx_buy:${product.id}`)
-            .setLabel('Commander')
+            .setLabel('Acheter maintenant')
             .setEmoji('🛒')
             .setStyle(ButtonStyle.Success)
         );
