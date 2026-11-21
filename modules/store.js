@@ -191,7 +191,12 @@ async function createTicket(interaction, product) {
     new ButtonBuilder()
       .setCustomId('marketx_order_reject')
       .setLabel('Refuser la commande')
-      .setStyle(ButtonStyle.Danger)
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId('marketx_ticket_close')
+      .setLabel('Fermer le ticket')
+      .setEmoji('🔒')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   await channel.send({
@@ -437,6 +442,139 @@ const commands = [
       });
     }
   }
+,
+  {
+    data: new SlashCommandBuilder()
+      .setName('commande-refuser')
+      .setDescription('Refuser une commande avec un motif obligatoire')
+      .addStringOption(option => option
+        .setName('raison')
+        .setDescription('Motif du refus')
+        .setMaxLength(1000)
+        .setRequired(true)
+      ),
+
+    async execute(interaction) {
+      if (!interaction.guildId || !interaction.channelId) {
+        return interaction.reply({
+          content: '❌ Utilise cette commande dans un ticket.',
+          ephemeral: true
+        });
+      }
+
+      const data = getGuildData(interaction.guildId);
+      const order = data.orders[interaction.channelId];
+
+      if (!order || order.guildId !== interaction.guildId) {
+        return interaction.reply({
+          content: '❌ Aucune commande trouvée dans ce salon.',
+          ephemeral: true
+        });
+      }
+
+      if (order.status !== 'pending') {
+        return interaction.reply({
+          content: '❌ Cette commande a déjà été traitée.',
+          ephemeral: true
+        });
+      }
+
+      const allowed = isAdmin(interaction) ||
+        interaction.member.roles.cache.some(role =>
+          data.ticketRoles[interaction.guildId].includes(role.id)
+        );
+
+      if (!allowed) {
+        return interaction.reply({
+          content: '❌ Tu ne possèdes pas le rôle vendeur autorisé.',
+          ephemeral: true
+        });
+      }
+
+      const reason = interaction.options.getString('raison', true).trim();
+
+      if (!reason) {
+        return interaction.reply({
+          content: '❌ Le motif est obligatoire.',
+          ephemeral: true
+        });
+      }
+
+      const now = Date.now();
+
+      order.status = 'rejected';
+      order.rejectionReason = reason;
+      order.rejectedBy = interaction.user.id;
+      order.rejectedAt = now;
+
+      const ticket = data.tickets[interaction.channelId];
+
+      if (ticket) {
+        ticket.status = 'rejected';
+        ticket.rejectionReason = reason;
+        ticket.rejectedBy = interaction.user.id;
+        ticket.rejectedAt = now;
+      }
+
+      data.orderHistory[interaction.guildId] ||= [];
+      data.orderHistory[interaction.guildId].push({ ...order });
+
+      db.save(data);
+
+      // Désactiver les boutons de validation et de refus,
+      // mais conserver le bouton de fermeture.
+      try {
+        const messages = await interaction.channel.messages.fetch({ limit: 50 });
+
+        const orderMessage = messages.find(message =>
+          message.author.id === interaction.client.user.id &&
+          message.components.some(row =>
+            row.components.some(component =>
+              component.customId === 'marketx_order_validate'
+            )
+          )
+        );
+
+        if (orderMessage) {
+          const rows = orderMessage.components.map(row =>
+            new ActionRowBuilder().addComponents(
+              row.components.map(component =>
+                ButtonBuilder.from(component).setDisabled(
+                  component.customId !== 'marketx_ticket_close'
+                )
+              )
+            )
+          );
+
+          await orderMessage.edit({ components: rows });
+        }
+      } catch (error) {
+        console.error('Erreur boutons refus:', error);
+      }
+
+      const embed = new EmbedBuilder()
+        .setColor(0xEF4444)
+        .setTitle('❌ COMMANDE REFUSÉE')
+        .setDescription([
+          '**Produit :** ' + (order.productName || 'Non renseigné'),
+          '**Client :** <@' + order.clientId + '>',
+          '**Motif :** ' + reason
+        ].join('\n'))
+        .addFields(
+          { name: 'Refusée par', value: '<@' + interaction.user.id + '>', inline: true },
+          { name: 'Statut', value: 'Refusée', inline: true }
+        )
+        .setFooter({ text: 'MarketX • Gestion des commandes' })
+        .setTimestamp();
+
+      await interaction.channel.send({ embeds: [embed] });
+
+      return interaction.reply({
+        content: '✅ Commande refusée. Le motif a été enregistré.',
+        ephemeral: true
+      });
+    }
+  }
 ];
 
 async function handleButton(interaction) {
@@ -478,6 +616,55 @@ async function handleButton(interaction) {
       content: `✅ Ton ticket de commande a été créé : ${channel}`,
       ephemeral: true
     });
+
+    return true;
+  }
+
+
+  if (interaction.customId === 'marketx_ticket_close') {
+    const data = getGuildData(interaction.guildId);
+    const ticket = data.tickets[interaction.channelId];
+
+    if (!ticket || ticket.guildId !== interaction.guildId) {
+      await interaction.reply({
+        content: '❌ Ce salon ne correspond pas à un ticket MarketX.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    const isClient = ticket.clientId === interaction.user.id;
+    const isStaff = isAdmin(interaction) ||
+      interaction.member.roles.cache.some(role =>
+        data.ticketRoles[interaction.guildId].includes(role.id)
+      );
+
+    if (!isClient && !isStaff) {
+      await interaction.reply({
+        content: '❌ Tu n’es pas autorisé à fermer ce ticket.',
+        ephemeral: true
+      });
+      return true;
+    }
+
+    await interaction.reply({
+      content: '🔒 Fermeture du ticket dans 5 secondes...',
+      ephemeral: true
+    });
+
+    await interaction.channel.send(
+      '🔒 Ticket fermé par <@' + interaction.user.id + '>. Ce salon sera supprimé dans **5 secondes**.'
+    );
+
+    const channel = interaction.channel;
+
+    setTimeout(async () => {
+      try {
+        await channel.delete('Fermeture du ticket MarketX');
+      } catch (error) {
+        console.error('Impossible de supprimer le ticket:', error);
+      }
+    }, 5000);
 
     return true;
   }
